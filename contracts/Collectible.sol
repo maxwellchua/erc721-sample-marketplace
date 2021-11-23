@@ -1,6 +1,6 @@
 // contracts/Collectible.sol
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.5;
+pragma solidity 0.7.5;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -16,8 +16,8 @@ import "@openzeppelin/contracts/token/ERC721/ERC721Pausable.sol";
  *
  * The following functions were added and modified:
  *  - add EIP-2981: NFT Royalty Standard specification, which added:
- *    - {_royalties} mapping to keep track of royalties
- *    - {_creators} mapping to keep track of the original creators of the token
+ *    - {royalties} mapping to keep track of royalties
+ *    - {creators} mapping to keep track of the original creators of the token
  *    - {royaltyInfo} function as specified by EIP-2981
  *  - add {_marketAddress} property that is declared on deployment and editable only by the owner
  *    - {setMarketAddress} revokes the roles of the previous {_marketAddress} and grants both
@@ -37,30 +37,40 @@ import "@openzeppelin/contracts/token/ERC721/ERC721Pausable.sol";
 contract Collectible is AccessControl, Ownable, ERC721Burnable, ERC721Pausable {
     using SafeMath for uint256;
 
+    event LogMarketChanged(
+        address indexed collectibleAddress,
+        address newMarketAddress,
+        address author
+    );
+
     /*
      * EIP-2981: NFT Royalty Standard
-     * bytes4(keccak256("royaltyInfo(uint256,uint256)")) == 0x2a55205a
-     * => 0x2a55205a;
      */
-    bytes4 private constant _INTERFACE_ID_ERC2981 = 0x2a55205a;
-
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    // COL-02C: Usage of Interface ID Literal
+    bytes4 private constant _INTERFACE_ID_ERC2981 =
+        Collectible.royaltyInfo.selector;
+    // COL-01C: Redundant Visibility Specifiers
+    bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 private constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    // COL-04S: Inexplicable Value Literal
+    uint256 private constant MAX_PERCENTAGE = 10000;
 
     // Contract address of the Market contract that can access this collectible
     address private _marketAddress;
 
-    // A mapping to of the royalty percentage per token id
-    // _royalties[tokenId] = (using 2 decimals -> 10000 = 100.00, 0 = 0.00)
-    mapping(uint256 => uint16) public _royalties;
-
-    // A mapping of the original creator or first minter of the token
-    // _creators[tokenId] = address
-    mapping(uint256 => address) public _creators;
-
     // A mapping to indicate if a token id is for sale on the market or not
     // _forSale[tokenId] = bool
     mapping(uint256 => bool) private _forSale;
+
+    // A mapping to of the royalty percentage per token id
+    // royalties[tokenId] = (using 2 decimals -> 10000 = 100.00, 0 = 0.00)
+    // COL-02S: Incorrect Naming Convention
+    mapping(uint256 => uint16) public royalties;
+
+    // A mapping of the original creator or first minter of the token
+    // creators[tokenId] = address
+    // COL-02S: Incorrect Naming Convention
+    mapping(uint256 => address) public creators;
 
     /**
      * @dev Grants `DEFAULT_ADMIN_ROLE` to the address that deploys the contract.
@@ -70,8 +80,14 @@ contract Collectible is AccessControl, Ownable, ERC721Burnable, ERC721Pausable {
     constructor(address marketAddress)
         ERC721("TEST ERC721", "$TEST")
     {
+        // COL-01S: Inexistent Zero Address Validation
+        require(
+            marketAddress != address(0),
+            "Collectible: zero address for market"
+        );
         _marketAddress = marketAddress;
 
+        _registerInterface(_INTERFACE_ID_ERC2981);
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
         _setupRole(MINTER_ROLE, marketAddress);
         _setupRole(PAUSER_ROLE, marketAddress);
@@ -108,11 +124,17 @@ contract Collectible is AccessControl, Ownable, ERC721Burnable, ERC721Pausable {
      *
      * Requirements:
      * - the caller must be the owner.
+     * - there should be no tokens minted.
      */
     function setMarketAddress(address marketAddress) public onlyOwner {
         require(
             marketAddress != address(0),
             "Collectible: zero address for market"
+        );
+        // COL-02M: Overly Centralized Single Point of Failure
+        require(
+            totalSupply() == 0,
+            "Collectible: tokens already minted, can no longer update the market address"
         );
 
         revokeRole(MINTER_ROLE, _marketAddress);
@@ -121,6 +143,9 @@ contract Collectible is AccessControl, Ownable, ERC721Burnable, ERC721Pausable {
         _marketAddress = marketAddress;
         _setupRole(MINTER_ROLE, marketAddress);
         _setupRole(PAUSER_ROLE, marketAddress);
+
+        // COL-03S: Inexistent Event Emission
+        emit LogMarketChanged(address(this), marketAddress, _msgSender());
     }
 
     /**
@@ -162,27 +187,29 @@ contract Collectible is AccessControl, Ownable, ERC721Burnable, ERC721Pausable {
         uint256 tokenId,
         string memory tokenURI,
         address creator,
-        uint16 royalty,
-        bool forSale
+        uint16 royalty
     ) public virtual {
         require(
             hasRole(MINTER_ROLE, _msgSender()),
             "Collectible: must have minter role to mint"
         );
         require(
-            _creators[tokenId] == address(0),
+            creators[tokenId] == address(0),
             "Collectible: token is already minted"
         );
         require(bytes(tokenURI).length > 0, "Collectible: uri should be set");
         require(creator != address(0), "Collectible: zero address for creator");
-        require(royalty < 10000, "Collectible: royalty too high");
+        require(royalty < MAX_PERCENTAGE, "Collectible: royalty too high");
+
+        // COL-01M: Improper Mint Execution Flow
+        royalties[tokenId] = royalty;
+        creators[tokenId] = creator;
+        // set to false as default
+        _forSale[tokenId] = false;
 
         _safeMint(to, tokenId);
+        // _setTokenURI requires an existing id, so we mint first
         _setTokenURI(tokenId, tokenURI);
-
-        _royalties[tokenId] = royalty;
-        _creators[tokenId] = creator;
-        _forSale[tokenId] = forSale;
     }
 
     /**
@@ -276,9 +303,10 @@ contract Collectible is AccessControl, Ownable, ERC721Burnable, ERC721Pausable {
         returns (address receiver, uint256 royaltyAmount)
     {
         require(_exists(_tokenId), "Collectible: query for nonexistent token");
+        // COL-04S: Inexplicable Value Literal
         return (
-            _creators[_tokenId],
-            (_salePrice * _royalties[_tokenId]) / 10000
+            creators[_tokenId],
+            (_salePrice * royalties[_tokenId]) / MAX_PERCENTAGE
         );
     }
 

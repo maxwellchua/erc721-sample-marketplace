@@ -42,6 +42,15 @@ describe("Collectible", function () {
       ).to.be.revertedWith("Collectible: zero address for market");
     });
 
+    it("setMarketAddress emits an event on successful update", async function () {
+      const [owner, addr1] = await ethers.getSigners();
+      await await expect(this.collectible.setMarketAddress(addr1.address))
+        .to.emit(this.collectible, "LogMarketChanged")
+        .withArgs(this.collectible.address, addr1.address, owner.address);
+      const marketAddress = await this.collectible.getMarketAddress();
+      expect(marketAddress).to.equal(addr1.address);
+    });
+
     it("setMarketAddress updates the market address and revoke the roles of the previous address", async function () {
       const [owner, addr1] = await ethers.getSigners();
       await this.collectible.setMarketAddress(addr1.address);
@@ -56,8 +65,7 @@ describe("Collectible", function () {
           0,
           "http://localhost/token/0/",
           owner.address,
-          500,
-          false
+          500
         );
 
       await this.collectible.connect(addr1).pause();
@@ -69,13 +77,30 @@ describe("Collectible", function () {
           0,
           "http://localhost/token/0/",
           owner.address,
-          500,
-          false
+          500
         )
       ).to.be.revertedWith("Collectible: must have minter role to mint");
 
       await expect(this.collectible.pause()).to.be.revertedWith(
         "Collectible: must have pauser role to pause"
+      );
+    });
+
+    it("setMarketAddress fails if there's already a minted token", async function () {
+      const [owner, addr1] = await ethers.getSigners();
+
+      await this.collectible.mint(
+        owner.address,
+        0,
+        "http://localhost/token/0/",
+        owner.address,
+        500
+      );
+
+      await expect(
+        this.collectible.setMarketAddress(addr1.address)
+      ).to.be.revertedWith(
+        "Collectible: tokens already minted, can no longer update the market address"
       );
     });
   });
@@ -91,8 +116,7 @@ describe("Collectible", function () {
             0,
             "http://localhost/token/0/",
             owner.address,
-            500,
-            false
+            500
           )
       ).to.be.revertedWith("Collectible: must have minter role to mint");
     });
@@ -100,7 +124,7 @@ describe("Collectible", function () {
     it("token uri is required", async function () {
       const [owner] = await ethers.getSigners();
       await expect(
-        this.collectible.mint(owner.address, 0, "", owner.address, 500, false)
+        this.collectible.mint(owner.address, 0, "", owner.address, 500)
       ).to.be.revertedWith("Collectible: uri should be set");
     });
 
@@ -112,8 +136,7 @@ describe("Collectible", function () {
           0,
           "http://localhost/token/0/",
           "0x0000000000000000000000000000000000000000",
-          500,
-          false
+          500
         )
       ).to.be.revertedWith("Collectible: zero address for creator");
     });
@@ -126,8 +149,7 @@ describe("Collectible", function () {
           0,
           "http://localhost/token/0/",
           owner.address,
-          20000,
-          false
+          20000
         )
       ).to.be.revertedWith("Collectible: royalty too high");
 
@@ -137,8 +159,7 @@ describe("Collectible", function () {
           0,
           "http://localhost/token/0/",
           owner.address,
-          2000000000,
-          false
+          2000000000
         )
       ).to.be.reverted; // out of bounds
     });
@@ -150,8 +171,7 @@ describe("Collectible", function () {
         0,
         "http://localhost/token/0/",
         owner.address,
-        500,
-        false
+        500
       );
 
       const tokenOwner = await this.collectible.ownerOf(0);
@@ -170,8 +190,7 @@ describe("Collectible", function () {
         0,
         "http://localhost/token/0/",
         owner.address,
-        1000, // 10.00 %
-        false
+        1000 // 10.00 %
       );
 
       const [receiver, amount] = await this.collectible.royaltyInfo(0, 250);
@@ -188,8 +207,7 @@ describe("Collectible", function () {
         0,
         "http://localhost/token/0/",
         owner.address,
-        500,
-        false
+        500
       );
     });
 

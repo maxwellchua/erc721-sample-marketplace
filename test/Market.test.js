@@ -84,7 +84,7 @@ describe("Market", function () {
             auctionEndTime: 0,
           }
         )
-      ).to.be.revertedWith("Collectible: uri should be set");
+      ).to.be.revertedWith("Market: uri should be set");
     });
 
     it("royalty and commission should not total to 100", async function () {
@@ -336,6 +336,42 @@ describe("Market", function () {
       expect(await this.collectible.isForSale(1)).to.be.false;
       expect(await this.collectible.isForSale(2)).to.be.false;
       expect(await this.collectible.isForSale(3)).to.be.false;
+    });
+
+    it("successful collectible creation with correct tokenURIs", async function () {
+      const [owner] = await ethers.getSigners();
+      await expect(
+        this.market.createCollectible(
+          "http://localhost/tokens/",
+          5,
+          false,
+          {
+            commissionPercentage: 1000,
+            royaltyPercentage: 1000,
+            creators: [owner.address],
+            creatorPercentages: [10000],
+          },
+          {
+            isAuction: false,
+            reservePrice: 10,
+            auctionStartTime: 0,
+            auctionEndTime: 0,
+          }
+        )
+      )
+        .to.emit(this.market, "LogNewCollectibles")
+        .withArgs(this.market.address, owner.address, 0, 4);
+
+      const uri0 = await this.collectible.tokenURI(0);
+      expect(uri0).to.equal("http://localhost/tokens/");
+      const uri1 = await this.collectible.tokenURI(1);
+      expect(uri1).to.equal("http://localhost/tokens/");
+      const uri2 = await this.collectible.tokenURI(2);
+      expect(uri2).to.equal("http://localhost/tokens/");
+      const uri3 = await this.collectible.tokenURI(3);
+      expect(uri3).to.equal("http://localhost/tokens/");
+      const uri4 = await this.collectible.tokenURI(4);
+      expect(uri4).to.equal("http://localhost/tokens/");
     });
   });
 
@@ -1006,6 +1042,27 @@ describe("Market", function () {
 
       expect(await this.collectible.isForSale(0)).to.be.false;
       expect(await this.collectible.ownerOf(0)).to.equal(addr4.address);
+    });
+
+    it("validate that the token is removed from sale after the auction with no bidders", async function () {
+      const [owner, addr1] = await ethers.getSigners();
+
+      const twoDays = 2 * 24 * 60 * 60;
+      await ethers.provider.send("evm_increaseTime", [twoDays]);
+      await ethers.provider.send("evm_mine");
+
+      await expect(this.market.endAuction(0))
+        .to.emit(this.market, "LogAuctionEnded")
+        .withArgs(
+          this.market.address,
+          0,
+          addr1.address,
+          "0x0000000000000000000000000000000000000000",
+          0
+        );
+
+      expect(await this.collectible.isForSale(0)).to.be.false;
+      expect(await this.collectible.ownerOf(0)).to.equal(addr1.address);
     });
   });
 });

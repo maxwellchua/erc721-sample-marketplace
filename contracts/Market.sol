@@ -1,6 +1,6 @@
 // contracts/Market.sol
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.5;
+pragma solidity 0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -27,9 +27,10 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
     Counters.Counter private _tokenIdTracker;
 
     // Address of the currency used by the Market
-    IERC20 private _stableToken;
-
-    Collectible private _token;
+    // MAR-01C: Variable Mutability Specifiers
+    IERC20 private immutable _stableToken;
+    Collectible private immutable _token;
+    uint256 private constant MAX_PERCENTAGE = 10000;
 
     // Address of the recipient of all revenue commissions
     address private _commissionRecipient;
@@ -51,6 +52,19 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
         address stableTokenAddress,
         address commissionRecipient
     ) {
+        // MAR-02S: Inexistent Zero Address Validation
+        require(
+            collectibleAddress != address(0),
+            "Market: zero address for collectible"
+        );
+        require(
+            stableTokenAddress != address(0),
+            "Market: zero address for stable token"
+        );
+        require(
+            commissionRecipient != address(0),
+            "Market: zero address for recipient"
+        );
         _token = Collectible(collectibleAddress);
         _stableToken = IERC20(stableTokenAddress);
         _commissionRecipient = commissionRecipient;
@@ -61,7 +75,7 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
      */
     modifier validFee(Fee memory fee) {
         require(
-            fee.commissionPercentage + fee.royaltyPercentage < 10000,
+            fee.commissionPercentage + fee.royaltyPercentage < MAX_PERCENTAGE,
             "Market: commission and royalty rate must be less than 100"
         );
         require(
@@ -80,7 +94,10 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
             hasSender = hasSender || fee.creators[i] == _msgSender();
         }
 
-        require(total == 10000, "Market: creator shares must total to 100");
+        require(
+            total == MAX_PERCENTAGE,
+            "Market: creator shares must total to 100"
+        );
         require(hasSender, "Market: caller not included in the creator list");
         _;
     }
@@ -258,9 +275,10 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
         Fee memory fee,
         SaleInfo memory saleInfo
     ) external validFee(fee) nonReentrant {
+        require(bytes(baseURI).length > 0, "Market: uri should be set");
+
         uint256 mintId = _tokenIdTracker.current();
         bool tokenForSale = forSale;
-
         if (forSale) {
             _validateSaleInfo(saleInfo);
         }
@@ -270,14 +288,13 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
             if (forSale && saleInfo.isAuction && i > 0) {
                 tokenForSale = false;
             }
-
+            // MAR-02M: Inexistent Sale Flag on Mint
             _token.mint(
                 _msgSender(),
                 _tokenIdTracker.current(),
                 baseURI,
                 _msgSender(),
-                fee.royaltyPercentage,
-                tokenForSale
+                fee.royaltyPercentage
             );
             _tokenFees[_tokenIdTracker.current()] = fee;
             if (tokenForSale) {
@@ -286,6 +303,8 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
                     _msgSender(),
                     saleInfo
                 );
+                // MAR-02M: Inexistent Sale Flag on Mint
+                _token.setForSale(_tokenIdTracker.current());
             }
             _tokenIdTracker.increment();
         }
@@ -373,7 +392,7 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < fee.creators.length; i++) {
             uint256 shareProfit = royaltyAmount
                 .mul(fee.creatorPercentages[i])
-                .div(10000);
+                .div(MAX_PERCENTAGE);
             _stableToken.safeTransfer(fee.creators[i], shareProfit);
         }
     }
@@ -397,7 +416,9 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
         Fee memory fee = _tokenFees[tokenId];
 
         // commission fee
-        uint256 commissionFee = amount.mul(fee.commissionPercentage).div(10000);
+        uint256 commissionFee = amount.mul(fee.commissionPercentage).div(
+            MAX_PERCENTAGE
+        );
         _stableToken.safeTransfer(_commissionRecipient, commissionFee);
 
         if (creator == tokenOwner) {
@@ -418,14 +439,10 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
      * @dev Transfer the amount to this contract.
      */
     function _handleIncomingPayment(uint256 amount) private {
-        uint256 beforeBalance = _stableToken.balanceOf(address(this));
+        // MAR-03M: Potentially Restrictive Check
+        // Since we are using SafeERC20 wrapper, we can remove the previous require checks
+        // added here
         _stableToken.safeTransferFrom(_msgSender(), address(this), amount);
-        uint256 afterBalance = _stableToken.balanceOf(address(this));
-
-        require(
-            beforeBalance.add(amount) == afterBalance,
-            "Market: token transfer call did not transfer expected amount"
-        );
     }
 
     /**
@@ -455,7 +472,9 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
             "Market: token already owned by caller"
         );
 
+        // MAR-01S: Improper Order of Purchase
         _handleIncomingPayment(tokenPrice);
+        delete _tokensForSale[tokenId];
         _handlePaymentAndTokenTransfers(
             tokenId,
             tokenPrice,
@@ -463,7 +482,6 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
             _msgSender()
         );
 
-        delete _tokensForSale[tokenId];
         emit LogCollectibleSold(
             address(this),
             tokenId,
@@ -551,6 +569,8 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
             "Market: auction has not ended"
         );
 
+        // MAR-01S: Improper Order of Purchase
+        delete _tokensForSale[tokenId];
         if (winner != address(0)) {
             _handlePaymentAndTokenTransfers(
                 tokenId,
@@ -558,9 +578,11 @@ contract Market is IMarket, Ownable, ReentrancyGuard {
                 tokenOwner,
                 winner
             );
+        } else {
+            // MAR-01M: Improper Handling of Unbidded Ended Auctions
+            _token.removeFromSale(tokenId);
         }
 
-        delete _tokensForSale[tokenId];
         emit LogAuctionEnded(
             address(this),
             tokenId,
